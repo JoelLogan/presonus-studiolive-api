@@ -1,4 +1,4 @@
-import * as dgram from "dgram";
+import * as dgram from "node:dgram";
 import { MessageCode, PacketHeader } from "./constants";
 
 export type MeterData = {};
@@ -124,7 +124,7 @@ export default function createServer(port, onData: (data: MeterData) => any) {
 	});
 
 	return new Promise<dgram.Socket>((resolve) => {
-		UDPserver.on("message", (msg, rinfo) => {
+		UDPserver.on("message", (msg, _rinfo) => {
 			const data = Buffer.from(msg);
 			const parsed = parseDataFrame(data);
 			if (parsed) {

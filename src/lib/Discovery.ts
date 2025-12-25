@@ -18,7 +18,7 @@ export default class Discovery extends EventEmitter {
 	 * @returns
 	 */
 	async start(timeout = null) {
-		return new Promise<void>((resolve, reject) => {
+		return new Promise<void>((resolve, _reject) => {
 			this.stop();
 			this.setup();
 
@@ -64,7 +64,7 @@ export default class Discovery extends EventEmitter {
 			}
 
 			// eslint-disable-next-line
-			const [nameA, _, serial, nameB] = fragments;
+			const [nameA, _, serial, _nameB] = fragments;
 
 			if (!serial) return;
 

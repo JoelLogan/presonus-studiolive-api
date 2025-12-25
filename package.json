@@ -26,7 +26,7 @@
     "lint": "biome lint src/",
     "lint:fix": "biome lint --write src/",
     "format": "biome format --write src/",
-    "install": "npm run --silent build",
+    "prepare": "npm run build",
     "test": "sucrase-node test.ts | bunyan",
     "test:debug": "cross-env DEBUG=1 sucrase-node test.ts | bunyan"
   },
