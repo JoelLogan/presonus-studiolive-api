@@ -6,7 +6,6 @@ node_modules
 !ADDON.md
 test.ts
 example.js
-.swcrc.*.json
 .tool-versions
 .yarnrc
 pnpm-lock.yaml
