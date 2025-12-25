@@ -10,6 +10,26 @@ Tested against the following models:
 
 ---
 
+## Home Assistant Addon
+
+This package can now be used as a Home Assistant Addon! This allows you to control your PreSonus StudioLive mixer directly from Home Assistant.
+
+**Features:**
+- Control channel mutes from Home Assistant
+- Adjust channel levels remotely
+- Configurable mixer IP address
+- RESTful API for easy integration
+
+**Quick Start:**
+1. Add this repository to your Home Assistant add-on store
+2. Install the "PreSonus StudioLive Control" addon
+3. Configure your mixer's IP address
+4. Start the addon and integrate with Home Assistant automations
+
+See [ADDON.md](ADDON.md) for complete installation and usage instructions.
+
+---
+
 ## Installation
 
 ### For Development
