@@ -212,7 +212,7 @@ export class Client {
 	async connect(subscribeData?: SubscriptionOptions) {
 		if (this.connectPromise) return this.connectPromise;
 
-		const connectPromise = new Promise<this>((resolve, reject) => {
+		const connectPromise = new Promise<this>((resolve, _reject) => {
 			let fastReconnectTimer: ReturnType<typeof setTimeout>;
 			logger.info({ host: this.serverHost, port: this.serverPort }, "Connecting to console");
 
@@ -817,7 +817,7 @@ export class Client {
 	 * @param level
 	 * @param duration
 	 */
-	async normaliseChannelTo(channel, level, duration?: number) {
+	async normaliseChannelTo(_channel, _level, _duration?: number) {
 		// TODO:
 		throw new Error("Not implemented yet");
 	}

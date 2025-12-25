@@ -105,14 +105,14 @@ function parseChunk(data: Buffer) {
 	header = header.slice(2);
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	const unknown1 = header.slice(0, 2);
+	const _unknown1 = header.slice(0, 2);
 	header = header.slice(2);
 
 	const totalSize = header.readUInt16LE();
 	header = header.slice(2);
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	const unknown2 = header.slice(0, 4);
+	const _unknown2 = header.slice(0, 4);
 	header = header.slice(4);
 
 	const payloadSize = header.readUInt16LE();
