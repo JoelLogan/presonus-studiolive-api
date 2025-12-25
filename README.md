@@ -47,6 +47,13 @@ npm link presonus-studiolive-api
 
 [Refer to the documentation](https://featherbear.cc/presonus-studiolive-api)
 
+### Quick Start
+
+A complete example is provided in `example.js`. To run it:
+
+1. Update the IP address in `example.js` to match your mixer
+2. Run: `node example.js`
+
 ### Quick Example
 
 ```javascript
