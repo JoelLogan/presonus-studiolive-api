@@ -44,7 +44,10 @@ function initializeMixer() {
     try {
       client.disconnect();
     } catch (err) {
-      // Ignore errors during disconnect
+      // Log disconnect errors at debug level
+      if (config.log_level === 'debug') {
+        console.error('Error during disconnect:', err.message);
+      }
     }
   }
 
@@ -185,7 +188,7 @@ const server = http.createServer((req, res) => {
         const level = parseFloat(data.level);
 
         if (isNaN(level) || level < 0 || level > 100) {
-          throw new Error('Level must be a number between 0 and 100');
+          throw new Error('Level must be a number between 0 and 100 (0 = -84dB, 72 = 0dB unity, 100 = +10dB)');
         }
 
         console.log(`Setting level: ${selector.type} ${selector.channel} = ${level}`);
@@ -195,7 +198,8 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
           success: true,
           channel: selector,
-          level: level
+          level: level,
+          note: 'Level scale: 0 = -84dB, 72 = 0dB (unity), 100 = +10dB'
         }));
       } catch (err) {
         console.error('Error in /api/level:', err.message);
