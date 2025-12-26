@@ -12,17 +12,14 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package*.json ./
 
-# Install all dependencies (needed for build)
-RUN npm install
-
-# Copy source files
+# Copy source files and configuration (needed for prepare script during npm install)
 COPY src/ ./src/
 COPY tsconfig.json .
 COPY .swcrc.esm.json .
 COPY .swcrc.cjs.json .
 
-# Build the project
-RUN npm run build
+# Install all dependencies (this will run the prepare script and build)
+RUN npm install
 
 # Remove dev dependencies to reduce image size
 RUN npm prune --omit=dev
