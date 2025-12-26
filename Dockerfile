@@ -6,6 +6,9 @@ RUN apk add --no-cache \
     nodejs \
     npm
 
+# Update npm to the latest version for better performance and reliability
+RUN npm install -g npm@latest
+
 # Set working directory
 WORKDIR /app
 
