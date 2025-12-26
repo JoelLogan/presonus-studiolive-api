@@ -27,6 +27,9 @@ COPY .swcrc.cjs.json .
 # Now build the project
 RUN npm run build
 
+# Verify build succeeded and dist directory was created
+RUN test -f /app/dist/cjs/api.js || (echo "ERROR: Build failed - dist/cjs/api.js not found" && exit 1)
+
 # Remove dev dependencies to reduce image size
 RUN npm prune --omit=dev
 
