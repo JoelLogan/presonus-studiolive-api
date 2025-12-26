@@ -17,7 +17,8 @@ COPY package*.json ./
 
 # Install dependencies without running prepare script (skip build for now)
 # Use npm ci for faster, more reliable installs with clean slate
-# Increase timeout to handle large binary downloads (like @swc/core)
+# Increase timeout to 300000ms (5 minutes) to handle large binary downloads (like @swc/core)
+# Add retry logic to handle transient network issues
 RUN npm ci --ignore-scripts --fetch-timeout=300000 --fetch-retries=5
 
 # Copy source files and configuration (needed for build)
