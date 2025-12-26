@@ -9,7 +9,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { Client } = require('../dist/cjs/api');
+const { Client } = require('/app/dist/cjs/api');
 
 // Read configuration from Home Assistant
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/options.json';
