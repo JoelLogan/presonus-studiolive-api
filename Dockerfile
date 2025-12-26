@@ -12,14 +12,19 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package*.json ./
 
-# Copy source files and configuration (needed for prepare script during npm install)
+# Install dependencies without running prepare script (skip build for now)
+# Use npm ci for faster, more reliable installs with clean slate
+# Increase timeout to handle large binary downloads (like @swc/core)
+RUN npm ci --ignore-scripts --fetch-timeout=300000 --fetch-retries=5
+
+# Copy source files and configuration (needed for build)
 COPY src/ ./src/
 COPY tsconfig.json .
 COPY .swcrc.esm.json .
 COPY .swcrc.cjs.json .
 
-# Install all dependencies (this will run the prepare script and build)
-RUN npm install
+# Now build the project
+RUN npm run build
 
 # Remove dev dependencies to reduce image size
 RUN npm prune --omit=dev
