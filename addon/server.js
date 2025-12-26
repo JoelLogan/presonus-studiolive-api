@@ -42,7 +42,7 @@ let isConnected = false;
 function initializeMixer() {
   if (client) {
     try {
-      client.disconnect();
+      client.close();
     } catch (err) {
       // Log disconnect errors at debug level
       if (config.log_level === 'debug') {
@@ -268,7 +268,7 @@ process.on('SIGTERM', () => {
   console.log('Received SIGTERM, shutting down gracefully...');
   server.close(() => {
     if (client) {
-      client.disconnect();
+      client.close();
     }
     process.exit(0);
   });
@@ -278,7 +278,7 @@ process.on('SIGINT', () => {
   console.log('Received SIGINT, shutting down gracefully...');
   server.close(() => {
     if (client) {
-      client.disconnect();
+      client.close();
     }
     process.exit(0);
   });
