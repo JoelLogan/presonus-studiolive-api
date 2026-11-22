@@ -103,20 +103,20 @@ GET http://homeassistant.local:8099/api/channels
 
 ### REST Commands
 
-Add these to your `configuration.yaml`:
+Add these to your `configuration.yaml`. Home Assistant core runs on the host network, so it reaches the add-on at `127.0.0.1:8099`. From other devices, use your Home Assistant's address instead (e.g. `homeassistant.local:8099`).
 
 ```yaml
 rest_command:
   # Mute a channel
   presonus_mute:
-    url: "http://homeassistant.local:8099/api/mute"
+    url: "http://127.0.0.1:8099/api/mute"
     method: POST
     content_type: "application/json"
     payload: '{"channel_type": "{{ channel_type }}", "channel_number": {{ channel_number }}, "muted": {{ muted }}}'
   
   # Set channel level
   presonus_level:
-    url: "http://homeassistant.local:8099/api/level"
+    url: "http://127.0.0.1:8099/api/level"
     method: POST
     content_type: "application/json"
     payload: '{"channel_type": "{{ channel_type }}", "channel_number": {{ channel_number }}, "level": {{ level }}}'
@@ -229,6 +229,7 @@ input_number:
 
 automation:
   - alias: "Update mic 1 level"
+    mode: restart  # newest value always wins; never drops the final value
     trigger:
       - platform: state
         entity_id: input_number.mic_1_level
@@ -239,6 +240,28 @@ automation:
           channel_number: 1
           level: "{{ states('input_number.mic_1_level') | int }}"
 ```
+
+### Real-time sliders (updating while you drag)
+
+If your slider card sends the value continuously while dragging (not only on release), each movement becomes a Home Assistant state change, an automation run and an HTTP request. Three settings keep that from bogging down Home Assistant:
+
+1. **`mode: restart` on the level automation.** The newest value always wins. With the default `mode: single`, values that arrive while the automation is still running are dropped, and that can include the final one, so the fader ends up in the wrong place.
+2. **Call the add-on at `127.0.0.1:8099`** (as in the `rest_command` examples above), not `homeassistant.local`. Home Assistant core runs on the host network, so this skips a name lookup on every request.
+3. **Keep the level helpers out of history.** Every slider movement is otherwise written to the database on your device:
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - input_number.*_level
+
+logbook:
+  exclude:
+    entity_globs:
+      - input_number.*_level
+```
+
+The add-on itself also limits writes to the mixer: each channel gets at most one write every 25 ms, the newest value wins, and the final value is always sent.
 
 ## Troubleshooting
 

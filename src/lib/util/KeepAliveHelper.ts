@@ -32,6 +32,11 @@ export default class KeepAliveHelper {
 		};
 	}
 
+	stop() {
+		clearInterval(this.#loop);
+		this.#loop = null;
+	}
+
 	// Send a KeepAlive packet every second
 	start(checkFn: (data: Buffer[]) => void, failFn: () => void) {
 		clearInterval(this.#loop);

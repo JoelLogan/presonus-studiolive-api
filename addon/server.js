@@ -9,7 +9,16 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { Client } = require('/app/dist/cjs/api');
+const { createLevelCoalescer } = require('./levelCoalescer');
+
+// Inside the add-on container the library is built to /app/dist; fall back to
+// the repository build so the server can also be run locally for testing.
+const LIB_DIR = fs.existsSync('/app/dist/cjs/api.js')
+  ? '/app/dist/cjs'
+  : path.join(__dirname, '..', 'dist', 'cjs');
+const { Client } = require(path.join(LIB_DIR, 'api'));
+// The library's own channel validation (uses the channel counts reported by the mixer)
+const { parseChannelString } = require(path.join(LIB_DIR, 'lib', 'util', 'channelUtil'));
 
 // Read configuration from Home Assistant
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/options.json';
@@ -35,9 +44,33 @@ console.log('Mixer IP:', config.mixer_ip);
 console.log('Mixer Port:', config.mixer_port);
 console.log('Log Level:', config.log_level);
 
+const DEBUG = config.log_level === 'debug';
+function debugLog(...args) {
+  if (DEBUG) console.log(...args);
+}
+
+// Minimum time between level writes to the mixer for a single channel.
+// Bursts (e.g. a slider being dragged) are coalesced: newest value wins and the
+// final value is always sent.
+const LEVEL_INTERVAL_MS = 25;
+
 // Initialize mixer client
 let client = null;
 let isConnected = false;
+
+const levelCoalescer = createLevelCoalescer((selector, level) => {
+  if (!client || !isConnected) return;
+  debugLog(`Sending level: ${selector.type} ${selector.channel} = ${level}`);
+  // Writes can run from a timer, outside any request handler, so an error here
+  // must never escape and take down the process
+  try {
+    client.setChannelVolumeLinear(selector, level).catch((err) => {
+      console.error('Error sending level:', err.message);
+    });
+  } catch (err) {
+    console.error('Error sending level:', err.message);
+  }
+}, LEVEL_INTERVAL_MS);
 
 function initializeMixer() {
   if (client) {
@@ -93,10 +126,16 @@ function parseChannelSelector(data) {
     throw new Error('Missing required fields: channel_type and channel_number');
   }
 
-  return {
-    type: data.channel_type.toUpperCase(),
+  const selector = {
+    type: String(data.channel_type).toUpperCase(),
     channel: parseInt(data.channel_number)
   };
+
+  // Throws "Invalid channel ..." for unknown types or channels the mixer doesn't have,
+  // so bad requests get a 400 response instead of failing later
+  parseChannelString(selector);
+
+  return selector;
 }
 
 // HTTP Server
@@ -152,7 +191,7 @@ const server = http.createServer((req, res) => {
         const selector = parseChannelSelector(data);
         const muted = data.muted !== undefined ? data.muted : true;
 
-        console.log(`Setting mute: ${selector.type} ${selector.channel} = ${muted}`);
+        debugLog(`Setting mute: ${selector.type} ${selector.channel} = ${muted}`);
         client.setMute(selector, muted);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -191,8 +230,8 @@ const server = http.createServer((req, res) => {
           throw new Error('Level must be a number between 0 and 100 (0 = -84dB, 72 = 0dB unity, 100 = +10dB)');
         }
 
-        console.log(`Setting level: ${selector.type} ${selector.channel} = ${level}`);
-        client.setChannelVolumeLinear(selector, level);
+        debugLog(`Received level: ${selector.type} ${selector.channel} = ${level}`);
+        levelCoalescer.set(selector, level);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -264,22 +303,24 @@ server.listen(PORT, () => {
 });
 
 // Handle shutdown gracefully
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM, shutting down gracefully...');
-  server.close(() => {
+function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down gracefully...`);
+  levelCoalescer.clear();
+  // Don't let idle keep-alive HTTP connections hold the shutdown open
+  server.closeAllConnections?.();
+  server.close(async () => {
     if (client) {
-      client.close();
+      try {
+        await client.close();
+      } catch (err) {
+        debugLog('Error during disconnect:', err.message);
+      }
     }
     process.exit(0);
   });
-});
+  // Hard stop if something hangs
+  setTimeout(() => process.exit(0), 3000).unref();
+}
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT, shutting down gracefully...');
-  server.close(() => {
-    if (client) {
-      client.close();
-    }
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

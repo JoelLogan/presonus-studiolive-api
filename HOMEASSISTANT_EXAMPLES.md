@@ -11,13 +11,13 @@ Add to `configuration.yaml`:
 ```yaml
 rest_command:
   presonus_mute:
-    url: "http://homeassistant.local:8099/api/mute"
+    url: "http://127.0.0.1:8099/api/mute"
     method: POST
     content_type: "application/json"
     payload: '{"channel_type": "{{ channel_type }}", "channel_number": {{ channel_number }}, "muted": {{ muted }}}'
   
   presonus_level:
-    url: "http://homeassistant.local:8099/api/level"
+    url: "http://127.0.0.1:8099/api/level"
     method: POST
     content_type: "application/json"
     payload: '{"channel_type": "{{ channel_type }}", "channel_number": {{ channel_number }}, "level": {{ level }}}'
@@ -150,6 +150,7 @@ automation:
 automation:
   - id: sync_mic_1_level
     alias: "Sync Mic 1 Level to Mixer"
+    mode: restart  # newest value always wins; never drops the final value
     trigger:
       - platform: state
         entity_id: input_number.mic_1_level
@@ -162,6 +163,7 @@ automation:
   
   - id: sync_mic_2_level
     alias: "Sync Mic 2 Level to Mixer"
+    mode: restart
     trigger:
       - platform: state
         entity_id: input_number.mic_2_level
@@ -171,6 +173,22 @@ automation:
           channel_type: LINE
           channel_number: 2
           level: "{{ states('input_number.mic_2_level') | int }}"
+```
+
+Use `mode: restart` on level automations: if the slider sends several values quickly, the newest one always wins. With the default `mode: single`, later values (including the final one) can be dropped while an earlier run is still in progress.
+
+To keep slider movements out of the history database (important if your slider sends values while dragging):
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - input_number.*_level
+
+logbook:
+  exclude:
+    entity_globs:
+      - input_number.*_level
 ```
 
 ### Automatic Mute Based on Conditions
