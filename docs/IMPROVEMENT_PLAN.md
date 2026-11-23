@@ -8,7 +8,7 @@
 | 3: Library crash fixes (socket errors, framing reset, close) | Done in 1.1.0. Fast disconnect detection still open |
 | 2: MQTT entities with two-way state | Done in 1.2.0. Done before Phase 1, because it lets the existing `custom-mixer-card` dashboard drag in real time |
 | 1: WebSocket fader page through ingress | Optional now; only needed if dashboard dragging isn't smooth enough |
-| 4: Build and packaging | Not started |
+| 4: Build and packaging | Done in 1.3.0 (images built in GitHub Actions, multi-stage Dockerfile, base image update). Duplicate pnpm lockfile removed. Standard add-on folder layout still open |
 | 5: Nice-to-haves | Not started |
 
 ## 1. How it works today
@@ -100,7 +100,7 @@ Problems found in `src/lib`:
 - **Stop compiling on the Green.** Build multi-arch images in GitHub Actions (`home-assistant/builder`), push them to GHCR, and set `image:` in the add-on config. Updates then become a fast pull instead of an `npm ci` + swc + tsc run on eMMC. At minimum, use a multi-stage Dockerfile so dev deps and build tools never reach the final image.
 - Move the add-on into its own folder (`presonus_studiolive/` with `config.yaml`, `Dockerfile`, `rootfs/`), the standard HA add-on repository layout, so the library and add-on can be versioned separately.
 - Update the base image (`hassio-addons/base` 15.0.1 is old). Drop `armhf`/`armv7`/`i386`, which HA has deprecated; the Green is `aarch64`.
-- Use one lockfile: CI uses pnpm, but the Dockerfile uses `package-lock.json`. Pick one.
+- Use one lockfile: CI uses pnpm, but the Dockerfile uses `package-lock.json`. Pick one. (Done in 1.3.0: `package-lock.json` only.)
 - Add `watchdog: http://[HOST]:[PORT:8099]/health`. Make `/health` return 503 while the mixer is disconnected, so the Supervisor can restart a wedged add-on.
 
 ### Phase 5: Nice-to-haves

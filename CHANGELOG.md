@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- The add-on is now installed as a ready-made image from GitHub Container Registry, built and tested by GitHub Actions. Installs and updates are a quick download instead of compiling on your device.
+- Updated to the current Home Assistant community base image (Alpine 3.24, Node.js 24). The previous base used Node.js 20, which reached end of life in April 2026.
+- Supported architectures are now `aarch64` (including Home Assistant Green) and `amd64`. The base image no longer supports `armhf`, `armv7` and `i386`.
+- Smaller image: the build tools are no longer included.
+
 ## 1.2.0
 
 - **Home Assistant entities over MQTT** (needs the Mosquitto broker add-on). For each channel in the new `channels` option the add-on creates a level slider (`number.presonus_<id>_level`) and a mute switch (`switch.presonus_<id>_mute`). They follow the mixer's real state, including changes made on the mixer itself or in UC Surface.

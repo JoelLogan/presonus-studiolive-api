@@ -15,10 +15,13 @@ This add-on connects to a PreSonus StudioLive III mixer (16, 16R, 24R, etc.) and
 5. Find "PreSonus StudioLive Control" in the add-on store
 6. Click **Install**
 
+The add-on is installed as a ready-made image (for `aarch64` and `amd64`), so installs and updates are quick.
+
 ### Option 2: Local Installation
 
 1. Copy this entire repository to `/addons/presonus-studiolive` in your Home Assistant configuration directory
-2. The addon should appear in your local add-ons
+2. To build the add-on on your device instead of downloading the published image, remove the `image` line from `config.json`
+3. The addon should appear in your local add-ons
 
 ## Configuration
 

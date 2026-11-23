@@ -10,6 +10,5 @@ test.ts
 example.js
 .tool-versions
 .yarnrc
-pnpm-lock.yaml
 dist
 addon/test
