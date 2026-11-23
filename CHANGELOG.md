@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- **Home Assistant entities over MQTT** (needs the Mosquitto broker add-on). For each channel in the new `channels` option the add-on creates a level slider (`number.presonus_<id>_level`) and a mute switch (`switch.presonus_<id>_mute`). They follow the mixer's real state, including changes made on the mixer itself or in UC Surface.
+- Real-time faders: commands go straight to the mixer. State is reported back to Home Assistant once a channel has been still for `state_debounce_ms` (default 300 ms), so dragging doesn't flood Home Assistant.
+- `binary_sensor.presonus_mixer_connected` shows the mixer connection immediately (no polling).
+- `switch.presonus_ha_control`: turn off to make the add-on ignore changes from Home Assistant (MQTT and HTTP).
+- New HTTP endpoints: `GET /api/state` and `POST /api/control`.
+- Fixed: fader levels reported by the mixer were stored on a 0–1 scale instead of 0–100.
+- Supervisor watchdog: the add-on is restarted if it stops responding.
+
 ## 1.1.0
 
 - Level changes are throttled per channel: at most one write to the mixer every 25 ms, the newest value wins, and the final value is always sent. Sliders that update while dragging no longer flood the mixer.

@@ -1,5 +1,16 @@
 # Improvement Plan: HA Green ↔ StudioLive Add-on
 
+## Status
+
+| Phase | State |
+| --- | --- |
+| 0: Quick wins (level throttling, quieter logs, docs) | Done in 1.1.0 |
+| 3: Library crash fixes (socket errors, framing reset, close) | Done in 1.1.0. Fast disconnect detection still open |
+| 2: MQTT entities with two-way state | Done in 1.2.0. Done before Phase 1, because it lets the existing `custom-mixer-card` dashboard drag in real time |
+| 1: WebSocket fader page through ingress | Optional now; only needed if dashboard dragging isn't smooth enough |
+| 4: Build and packaging | Not started |
+| 5: Nice-to-haves | Not started |
+
 ## 1. How it works today
 
 ```

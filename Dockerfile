@@ -33,6 +33,10 @@ RUN test -f /app/dist/cjs/api.js || (echo "ERROR: Build failed - dist/cjs/api.js
 # Remove dev dependencies to reduce image size
 RUN npm prune --omit=dev
 
+# Install add-on server dependencies (MQTT client) first for better layer caching
+COPY addon/package*.json /addon/
+RUN cd /addon && npm ci --omit=dev --fetch-timeout=300000 --fetch-retries=5
+
 # Copy addon files
 COPY addon/ /addon/
 
