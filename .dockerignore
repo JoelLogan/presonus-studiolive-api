@@ -12,3 +12,4 @@ example.js
 .yarnrc
 pnpm-lock.yaml
 dist
+addon/test

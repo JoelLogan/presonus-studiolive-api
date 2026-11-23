@@ -1,50 +1,55 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base:15.0.1
-FROM ${BUILD_FROM}
+ARG BUILD_FROM=ghcr.io/hassio-addons/base:21.0.11
 
-# Install Node.js and npm
-RUN apk add --no-cache \
-    nodejs \
-    npm
+# ---------------------------------------------------------------------------
+# Build stage: compile the library and install production dependencies
+# ---------------------------------------------------------------------------
+FROM ${BUILD_FROM} AS build
 
-# Set working directory
+RUN apk add --no-cache nodejs npm
+
 WORKDIR /app
 
-# Copy package files first for better layer caching
-COPY package*.json ./
-
-# Install dependencies without running prepare script (skip build for now)
-# Use npm ci for faster, more reliable installs with clean slate
-# Increase timeout to 300000ms (5 minutes) to handle large binary downloads (like @swc/core)
-# Add retry logic to handle transient network issues
+# Install all dependencies (including the TypeScript/swc toolchain) without
+# running the prepare script; the source isn't copied yet
+COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --fetch-timeout=300000 --fetch-retries=5
 
-# Copy source files and configuration (needed for build)
 COPY src/ ./src/
-COPY tsconfig.json .
-COPY .swcrc.esm.json .
-COPY .swcrc.cjs.json .
+COPY tsconfig.json .swcrc.esm.json .swcrc.cjs.json ./
+RUN npm run build \
+    && test -f dist/cjs/api.js \
+    && npm prune --omit=dev
 
-# Now build the project
-RUN npm run build
-
-# Verify build succeeded and dist directory was created
-RUN test -f /app/dist/cjs/api.js || (echo "ERROR: Build failed - dist/cjs/api.js not found" && exit 1)
-
-# Remove dev dependencies to reduce image size
-RUN npm prune --omit=dev
-
-# Install add-on server dependencies (MQTT client) first for better layer caching
-COPY addon/package*.json /addon/
+# Add-on server dependencies (MQTT client)
+COPY addon/package.json addon/package-lock.json /addon/
 RUN cd /addon && npm ci --omit=dev --fetch-timeout=300000 --fetch-retries=5
 
-# Copy addon files
-COPY addon/ /addon/
+# ---------------------------------------------------------------------------
+# Runtime image: Node.js, the compiled library and the add-on server only
+# ---------------------------------------------------------------------------
+FROM ${BUILD_FROM}
 
-# Make run script executable
+RUN apk add --no-cache nodejs
+
+WORKDIR /app
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /addon/node_modules /addon/node_modules
+COPY addon/ /addon/
 RUN chmod a+x /addon/run.sh
 
-# Expose API port
+ARG BUILD_ARCH=amd64
+ARG BUILD_VERSION=dev
+LABEL \
+    io.hass.name="PreSonus StudioLive Control" \
+    io.hass.description="Control PreSonus StudioLive III mixers from Home Assistant" \
+    io.hass.type="addon" \
+    io.hass.arch="${BUILD_ARCH}" \
+    io.hass.version="${BUILD_VERSION}" \
+    org.opencontainers.image.source="https://github.com/JoelLogan/presonus-studiolive-api" \
+    org.opencontainers.image.licenses="MIT"
+
 EXPOSE 8099
 
-# Start the addon
 CMD [ "/addon/run.sh" ]

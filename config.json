@@ -1,15 +1,13 @@
 {
   "name": "PreSonus StudioLive Control",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "slug": "presonus-studiolive",
   "description": "Control PreSonus StudioLive III mixers from Home Assistant",
   "arch": [
     "aarch64",
-    "amd64",
-    "armhf",
-    "armv7",
-    "i386"
+    "amd64"
   ],
+  "image": "ghcr.io/joellogan/{arch}-addon-presonus-studiolive",
   "startup": "application",
   "boot": "auto",
   "init": false,
