@@ -62,7 +62,11 @@ const transformers: {
 		fromPV: IGNORE,
 	},
 	"*.ch*.volume": {
-		fromPV: DEFAULT_TRANSFORMS.buffer.float,
+		// The console sends 0.0-1.0; store 0-100 like every other source of
+		// fader levels (MS packets, the zlib state dump and setChannelVolume*)
+		fromPV(bytes: Buffer) {
+			return DEFAULT_TRANSFORMS.buffer.float(bytes) * 100;
+		},
 		fromUB(value: number) {
 			return value * 100;
 		},

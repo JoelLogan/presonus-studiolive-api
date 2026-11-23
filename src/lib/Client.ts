@@ -80,6 +80,13 @@ export class Client {
 
 		this.conn = DataClient(this.handleRecvPacket.bind(this));
 
+		// A single persistent error handler. Socket errors (ECONNREFUSED, ECONNRESET, ...)
+		// are recovered by the keep-alive / reconnect logic; without a listener Node
+		// would throw them as unhandled 'error' events and crash the process.
+		this.conn.on("error", (err) => {
+			logger.debug({ err: err?.message }, "Socket error");
+		});
+
 		this.state = CacheProvider({
 			get: (key) => (this.zlibData ? getZlibValue(this.zlibData, key) : null),
 		});
@@ -224,6 +231,7 @@ export class Client {
 			this.conn.addListener("connect", () => {
 				clearTimeout(fastReconnectTimer);
 
+				this.keepAliveHelper?.stop();
 				this.keepAliveHelper = new KeepAliveHelper(3000);
 
 				// #region Connection handshake
@@ -295,7 +303,6 @@ export class Client {
 							logger.info("Connection closed");
 							this.emit("closed");
 
-							console.log("conn was closed so will reconnect");
 							if (this.options?.autoreconnect) {
 								this.emit("reconnecting");
 								reconnect();
@@ -317,7 +324,6 @@ export class Client {
 				this.conn.destroy();
 				fastReconnectTimer = setTimeout(() => reconnect(), 2000);
 				this.conn.connect(this.serverPort, this.serverHost);
-				this.conn.once("error", () => {});
 			};
 
 			doConnect();
@@ -328,9 +334,16 @@ export class Client {
 
 	async close() {
 		this.meterUnsubscribe();
-		await this._sendPacket(MessageCode.JSON, unsubscribePacket).then(() => {
-			this.conn.destroy();
-		});
+		// Stop the keep-alive loop so it doesn't trigger a reconnect after closing
+		this.keepAliveHelper?.stop();
+		if (!this.conn.destroyed) {
+			// Don't wait forever if the socket is already dead
+			await Promise.race([
+				this._sendPacket(MessageCode.JSON, unsubscribePacket),
+				new Promise((resolve) => setTimeout(resolve, 1000)),
+			]);
+		}
+		this.conn.destroy();
 	}
 
 	/**

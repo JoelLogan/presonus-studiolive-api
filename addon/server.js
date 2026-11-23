@@ -2,24 +2,41 @@
 
 /**
  * Home Assistant Addon Server for PreSonus StudioLive Control
- * 
- * Provides HTTP API endpoints for controlling mixer channels
+ *
+ * - Keeps one connection to the mixer (auto-reconnecting)
+ * - Exposes configured channels to Home Assistant over MQTT discovery
+ *   (level + mute entities that follow the mixer's real state)
+ * - Provides a small HTTP API on port 8099 (kept for scripts and backwards compatibility)
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { Client } = require('/app/dist/cjs/api');
+const { createLevelCoalescer } = require('./levelCoalescer');
 
-// Read configuration from Home Assistant
+// Inside the add-on container the library is built to /app/dist; fall back to
+// the repository build so the server can also be run locally for testing.
+const LIB_DIR = fs.existsSync('/app/dist/cjs/api.js')
+  ? '/app/dist/cjs'
+  : path.join(__dirname, '..', 'dist', 'cjs');
+// parseChannelString is the library's own channel validation (it uses the
+// channel counts reported by the mixer once connected)
+const { Client, MessageCode, parseChannelString } = require(path.join(LIB_DIR, 'api'));
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/options.json';
 let config = {
   mixer_ip: process.env.MIXER_IP || '192.168.1.100',
   mixer_port: parseInt(process.env.MIXER_PORT || '53000'),
-  log_level: process.env.LOG_LEVEL || 'info'
+  log_level: process.env.LOG_LEVEL || 'info',
+  mqtt_enabled: true,
+  state_debounce_ms: 300,
+  channels: []
 };
 
-// Try to load config from file
 if (fs.existsSync(CONFIG_PATH)) {
   try {
     const fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -35,22 +52,117 @@ console.log('Mixer IP:', config.mixer_ip);
 console.log('Mixer Port:', config.mixer_port);
 console.log('Log Level:', config.log_level);
 
-// Initialize mixer client
+const DEBUG = config.log_level === 'debug';
+function debugLog(...args) {
+  if (DEBUG) console.log(...args);
+}
+
+// Minimum time between level writes to the mixer for a single channel.
+// Bursts (e.g. a slider being dragged) are coalesced: newest value wins and the
+// final value is always sent.
+const LEVEL_INTERVAL_MS = 25;
+
+// Persistent add-on state (survives restarts)
+const DATA_DIR = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '.data'));
+const STATE_FILE = path.join(DATA_DIR, 'presonus_state.json');
+let persisted = { control_enabled: true };
+try {
+  persisted = { ...persisted, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
+} catch (err) {
+  // First run, or no saved state yet
+}
+function savePersisted() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify(persisted));
+  } catch (err) {
+    console.error('Failed to save state:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Channels exposed to Home Assistant
+// ---------------------------------------------------------------------------
+
+const channels = [];
+const channelByKey = new Map(); // "line/ch1/volume" -> { ch, kind }
+
+for (const raw of config.channels || []) {
+  try {
+    if (!raw.id || !/^[a-z0-9_]+$/.test(raw.id)) {
+      throw new Error('id must be lowercase letters, numbers and underscores');
+    }
+    if (channels.some((c) => c.id === raw.id)) {
+      throw new Error('duplicate id');
+    }
+    const selector = { type: String(raw.type).toUpperCase(), channel: parseInt(raw.number) };
+    const base = parseChannelString(selector); // validates the type
+    const ch = { id: raw.id, name: raw.name || raw.id, selector };
+    channels.push(ch);
+    channelByKey.set(`${base}/volume`, { ch, kind: 'level' });
+    channelByKey.set(`${base}/mute`, { ch, kind: 'mute' });
+  } catch (err) {
+    console.error(`Skipping channel ${JSON.stringify(raw)}: ${err.message}`);
+  }
+}
+console.log(`Configured channels: ${channels.map((c) => `${c.id}=${c.selector.type} ${c.selector.channel}`).join(', ') || 'none'}`);
+
+// ---------------------------------------------------------------------------
+// Mixer connection
+// ---------------------------------------------------------------------------
+
 let client = null;
 let isConnected = false;
+let bridge = null;
 
-function initializeMixer() {
-  if (client) {
+const levelCoalescer = createLevelCoalescer((selector, level) => {
+  if (!client || !isConnected) return;
+  debugLog(`Sending level: ${selector.type} ${selector.channel} = ${level}`);
+  // Writes can run from a timer, outside any request handler, so an error here
+  // must never escape and take down the process
+  try {
+    client.setChannelVolumeLinear(selector, level).catch((err) => {
+      console.error('Error sending level:', err.message);
+    });
+  } catch (err) {
+    console.error('Error sending level:', err.message);
+  }
+}, LEVEL_INTERVAL_MS);
+
+const mixer = {
+  setLevel(selector, level) {
+    levelCoalescer.set(selector, level);
+  },
+  setMute(selector, muted) {
+    client.setMute(selector, muted);
+    // The console doesn't necessarily echo our own change back, so record it
+    // in the local state cache right away (this is what gets reported to HA)
+    client.state.set(`${parseChannelString(selector)}/mute`, muted);
+  },
+  readLevel(selector) {
     try {
-      client.close();
+      const level = client?.getLevel(selector);
+      return typeof level === 'number' ? level : null;
     } catch (err) {
-      // Log disconnect errors at debug level
-      if (config.log_level === 'debug') {
-        console.error('Error during disconnect:', err.message);
-      }
+      return null;
+    }
+  },
+  readMute(selector) {
+    try {
+      const muted = client?.getMute(selector);
+      return typeof muted === 'boolean' ? muted : null;
+    } catch (err) {
+      return null;
     }
   }
+};
 
+function setControlEnabled(enabled) {
+  persisted.control_enabled = enabled;
+  savePersisted();
+}
+
+function initializeMixer() {
   client = new Client({
     host: config.mixer_ip,
     port: config.mixer_port
@@ -62,11 +174,20 @@ function initializeMixer() {
   client.on('connected', () => {
     console.log('✓ Connected to mixer at', config.mixer_ip);
     isConnected = true;
+    for (const ch of channels) {
+      try {
+        parseChannelString(ch.selector);
+      } catch (err) {
+        console.error(`Channel ${ch.id} (${ch.selector.type} ${ch.selector.channel}) does not exist on this mixer`);
+      }
+    }
+    bridge?.mixerStatusChanged(true);
   });
 
   client.on('closed', () => {
     console.log('✗ Connection to mixer closed');
     isConnected = false;
+    bridge?.mixerStatusChanged(false);
   });
 
   client.on('reconnecting', () => {
@@ -74,18 +195,56 @@ function initializeMixer() {
     isConnected = false;
   });
 
-  client.on('error', (err) => {
-    console.error('Mixer error:', err.message);
+  // Changes made on the console itself (or by UC Surface, or a scene recall)
+  client.on(MessageCode.ParamValue, ({ name }) => {
+    const hit = channelByKey.get(name);
+    if (hit) bridge?.channelChanged(hit.ch, hit.kind);
   });
 
-  // Connect to mixer
-  client.connect().catch(err => {
+  client.on(MessageCode.FaderPosition, () => {
+    for (const ch of channels) bridge?.channelChanged(ch, 'level');
+  });
+
+  client.connect().catch((err) => {
     console.error('Failed to connect to mixer:', err.message);
   });
 }
 
-// Initialize mixer connection
 initializeMixer();
+
+// ---------------------------------------------------------------------------
+// MQTT (Home Assistant entities)
+// ---------------------------------------------------------------------------
+
+const mqttHost = process.env.MQTT_HOST;
+if (config.mqtt_enabled === false) {
+  console.log('MQTT disabled in configuration');
+} else if (!mqttHost) {
+  console.warn('No MQTT broker found. Install the Mosquitto broker add-on to get Home Assistant entities.');
+} else if (channels.length === 0) {
+  console.warn('No channels configured, so no MQTT entities will be created');
+} else {
+  const { createMqttBridge } = require('./mqttBridge');
+  bridge = createMqttBridge({
+    url: `mqtt://${mqttHost}:${process.env.MQTT_PORT || 1883}`,
+    username: process.env.MQTT_USER,
+    password: process.env.MQTT_PASSWORD,
+    channels,
+    debounceMs: Math.max(50, parseInt(config.state_debounce_ms) || 300),
+    isMixerConnected: () => isConnected,
+    readLevel: mixer.readLevel,
+    readMute: mixer.readMute,
+    setLevel: mixer.setLevel,
+    setMute: mixer.setMute,
+    isControlEnabled: () => persisted.control_enabled,
+    setControlEnabled,
+    debugLog
+  });
+}
+
+// ---------------------------------------------------------------------------
+// HTTP API
+// ---------------------------------------------------------------------------
 
 // Parse channel selector from request body
 function parseChannelSelector(data) {
@@ -93,97 +252,133 @@ function parseChannelSelector(data) {
     throw new Error('Missing required fields: channel_type and channel_number');
   }
 
-  return {
-    type: data.channel_type.toUpperCase(),
+  const selector = {
+    type: String(data.channel_type).toUpperCase(),
     channel: parseInt(data.channel_number)
   };
+
+  // Throws "Invalid channel ..." for unknown types or channels the mixer doesn't have,
+  // so bad requests get a 400 response instead of failing later
+  parseChannelString(selector);
+
+  return selector;
 }
 
-// HTTP Server
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function readJsonBody(req, callback) {
+  let body = '';
+  req.on('data', (chunk) => {
+    body += chunk;
+    if (body.length > 64 * 1024) req.destroy();
+  });
+  req.on('end', () => {
+    let data;
+    try {
+      data = body ? JSON.parse(body) : {};
+    } catch (err) {
+      callback(new Error('Invalid JSON body'));
+      return;
+    }
+    callback(null, data);
+  });
+}
+
+function requireControl() {
+  if (!isConnected) throw new Error('Not connected to mixer');
+  if (!persisted.control_enabled) throw new Error('Home Assistant control is disabled');
+}
+
 const server = http.createServer((req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
     res.end();
     return;
   }
 
-  // Parse URL
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-  // Health check endpoint
   if (url.pathname === '/health' || url.pathname === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok',
-      connected: isConnected,
-      mixer: config.mixer_ip
-    }));
+    sendJson(res, 200, { status: 'ok', connected: isConnected, mixer: config.mixer_ip });
     return;
   }
 
-  // API Status endpoint
   if (url.pathname === '/api/status' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    sendJson(res, 200, {
       connected: isConnected,
       mixer_ip: config.mixer_ip,
-      mixer_port: config.mixer_port
-    }));
+      mixer_port: config.mixer_port,
+      control_enabled: persisted.control_enabled,
+      mqtt: !!bridge
+    });
     return;
   }
 
-  // Set Mute endpoint
+  // Current level/mute of every configured channel
+  if (url.pathname === '/api/state' && req.method === 'GET') {
+    sendJson(res, 200, {
+      connected: isConnected,
+      control_enabled: persisted.control_enabled,
+      channels: channels.map((ch) => ({
+        id: ch.id,
+        name: ch.name,
+        channel_type: ch.selector.type,
+        channel_number: ch.selector.channel,
+        level: isConnected ? mixer.readLevel(ch.selector) : null,
+        muted: isConnected ? mixer.readMute(ch.selector) : null
+      }))
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/control' && req.method === 'POST') {
+    readJsonBody(req, (err, data) => {
+      if (err || typeof data.enabled !== 'boolean') {
+        sendJson(res, 400, { success: false, error: err?.message || 'Body must be {"enabled": true|false}' });
+        return;
+      }
+      setControlEnabled(data.enabled);
+      bridge?.controlChanged(data.enabled);
+      sendJson(res, 200, { success: true, control_enabled: data.enabled });
+    });
+    return;
+  }
+
   if (url.pathname === '/api/mute' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    readJsonBody(req, (err, data) => {
       try {
-        if (!isConnected) {
-          throw new Error('Not connected to mixer');
-        }
-
-        const data = JSON.parse(body);
+        if (err) throw err;
+        requireControl();
         const selector = parseChannelSelector(data);
-        const muted = data.muted !== undefined ? data.muted : true;
+        const muted = data.muted !== undefined ? data.muted === true || data.muted === 'true' : true;
 
-        console.log(`Setting mute: ${selector.type} ${selector.channel} = ${muted}`);
-        client.setMute(selector, muted);
+        debugLog(`Setting mute: ${selector.type} ${selector.channel} = ${muted}`);
+        mixer.setMute(selector, muted);
+        const hit = channelByKey.get(`${parseChannelString(selector)}/mute`);
+        if (hit) bridge?.channelChanged(hit.ch, 'mute');
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          success: true,
-          channel: selector,
-          muted: muted
-        }));
-      } catch (err) {
-        console.error('Error in /api/mute:', err.message);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          success: false,
-          error: err.message
-        }));
+        sendJson(res, 200, { success: true, channel: selector, muted });
+      } catch (e) {
+        console.error('Error in /api/mute:', e.message);
+        sendJson(res, 400, { success: false, error: e.message });
       }
     });
     return;
   }
 
-  // Set Level endpoint
   if (url.pathname === '/api/level' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    readJsonBody(req, (err, data) => {
       try {
-        if (!isConnected) {
-          throw new Error('Not connected to mixer');
-        }
-
-        const data = JSON.parse(body);
+        if (err) throw err;
+        requireControl();
         const selector = parseChannelSelector(data);
         const level = parseFloat(data.level);
 
@@ -191,95 +386,82 @@ const server = http.createServer((req, res) => {
           throw new Error('Level must be a number between 0 and 100 (0 = -84dB, 72 = 0dB unity, 100 = +10dB)');
         }
 
-        console.log(`Setting level: ${selector.type} ${selector.channel} = ${level}`);
-        client.setChannelVolumeLinear(selector, level);
+        debugLog(`Received level: ${selector.type} ${selector.channel} = ${level}`);
+        mixer.setLevel(selector, level);
+        const hit = channelByKey.get(`${parseChannelString(selector)}/volume`);
+        if (hit) bridge?.channelChanged(hit.ch, 'level');
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        sendJson(res, 200, {
           success: true,
           channel: selector,
-          level: level,
+          level,
           note: 'Level scale: 0 = -84dB, 72 = 0dB (unity), 100 = +10dB'
-        }));
-      } catch (err) {
-        console.error('Error in /api/level:', err.message);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          success: false,
-          error: err.message
-        }));
+        });
+      } catch (e) {
+        console.error('Error in /api/level:', e.message);
+        sendJson(res, 400, { success: false, error: e.message });
       }
     });
     return;
   }
 
-  // Get channel info endpoint
   if (url.pathname === '/api/channels' && req.method === 'GET') {
-    try {
-      if (!isConnected) {
-        throw new Error('Not connected to mixer');
-      }
-
-      // Return available channel types
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        channel_types: ['LINE', 'AUX', 'FX', 'MAIN', 'DCA'],
-        note: 'Use channel_type and channel_number in your API calls'
-      }));
-    } catch (err) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: false,
-        error: err.message
-      }));
-    }
+    sendJson(res, 200, {
+      success: true,
+      channel_types: ['LINE', 'AUX', 'FX', 'MAIN', 'DCA'],
+      channel_counts: isConnected ? client.channelCounts : null,
+      configured: channels.map((ch) => ({ id: ch.id, name: ch.name, ...ch.selector }))
+    });
     return;
   }
 
-  // Not found
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
+  sendJson(res, 404, {
     error: 'Not found',
     available_endpoints: [
       'GET /',
       'GET /health',
       'GET /api/status',
+      'GET /api/state',
       'GET /api/channels',
       'POST /api/mute',
-      'POST /api/level'
+      'POST /api/level',
+      'POST /api/control'
     ]
-  }));
+  });
 });
 
 const PORT = 8099;
 server.listen(PORT, () => {
   console.log(`HTTP API server listening on port ${PORT}`);
-  console.log('Available endpoints:');
-  console.log('  GET  /health - Health check');
-  console.log('  GET  /api/status - Connection status');
-  console.log('  GET  /api/channels - Available channel types');
-  console.log('  POST /api/mute - Set channel mute state');
-  console.log('  POST /api/level - Set channel level');
 });
 
-// Handle shutdown gracefully
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM, shutting down gracefully...');
-  server.close(() => {
+// ---------------------------------------------------------------------------
+// Shutdown
+// ---------------------------------------------------------------------------
+
+function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down gracefully...`);
+  levelCoalescer.clear();
+  // Don't let idle keep-alive HTTP connections hold the shutdown open
+  server.closeAllConnections?.();
+  server.close(async () => {
+    try {
+      await bridge?.close();
+    } catch (err) {
+      debugLog('Error closing MQTT:', err.message);
+    }
     if (client) {
-      client.close();
+      try {
+        await client.close();
+      } catch (err) {
+        debugLog('Error during disconnect:', err.message);
+      }
     }
     process.exit(0);
   });
-});
+  // Hard stop if something hangs
+  setTimeout(() => process.exit(0), 3000).unref();
+}
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT, shutting down gracefully...');
-  server.close(() => {
-    if (client) {
-      client.close();
-    }
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

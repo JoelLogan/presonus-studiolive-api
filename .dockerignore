@@ -1,4 +1,6 @@
 node_modules
+**/node_modules
+addon/.data
 .git
 .github
 .gitignore
@@ -8,5 +10,5 @@ test.ts
 example.js
 .tool-versions
 .yarnrc
-pnpm-lock.yaml
 dist
+addon/test

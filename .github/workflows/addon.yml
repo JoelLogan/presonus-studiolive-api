@@ -1,0 +1,121 @@
+name: Add-on
+
+# Every push and pull request: lint, build the library, run the end-to-end test,
+# build the add-on image for each architecture and test the image itself.
+# Pushes to master also publish the images to GHCR, where Home Assistant
+# pulls them from (see "image" in config.json).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: addon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install library dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build library
+        run: npm run build
+
+      - name: Install add-on dependencies
+        working-directory: addon
+        run: npm ci
+
+      - name: End-to-end test (add-on server)
+        working-directory: addon
+        run: npm test
+
+      - name: Read add-on metadata
+        id: info
+        run: |
+          version=$(jq -r .version config.json)
+          base=$(jq -r --arg arch "${{ matrix.arch }}" '.build_from[$arch]' build.json)
+          image_template=$(jq -r .image config.json)
+          image=${image_template/\{arch\}/${{ matrix.arch }}}
+          publish=false
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            publish=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Add-on $version for ${{ matrix.arch }}: $image (base $base, publish: $publish)"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ steps.info.outputs.image }}:${{ steps.info.outputs.version }}
+          build-args: |
+            BUILD_FROM=${{ steps.info.outputs.base }}
+            BUILD_ARCH=${{ matrix.arch }}
+            BUILD_VERSION=${{ steps.info.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: End-to-end test (image)
+        working-directory: addon
+        env:
+          E2E_DOCKER_IMAGE: ${{ steps.info.outputs.image }}:${{ steps.info.outputs.version }}
+        run: npm test
+
+      - name: Log in to GHCR
+        if: steps.info.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        if: steps.info.outputs.publish == 'true'
+        run: |
+          image=${{ steps.info.outputs.image }}
+          version=${{ steps.info.outputs.version }}
+          # Never overwrite a published version: Home Assistant only offers an
+          # update when the version number changes
+          if docker manifest inspect "$image:$version" > /dev/null 2>&1; then
+            echo "::warning::$image:$version is already published. Bump \"version\" in config.json to release this change."
+            exit 0
+          fi
+          docker push "$image:$version"
+          docker tag "$image:$version" "$image:latest"
+          docker push "$image:latest"
